@@ -10,6 +10,17 @@ namespace {
 
 using json = nlohmann::json;
 
+// Strip whitespace that commonly sneaks in when the path is pasted into the settings field.
+std::string trim_response_path(const std::string &response_json_path)
+{
+	const char *whitespace = " \t\r\n\f\v";
+	const std::size_t first = response_json_path.find_first_not_of(whitespace);
+	if (first == std::string::npos)
+		return "";
+	const std::size_t last = response_json_path.find_last_not_of(whitespace);
+	return response_json_path.substr(first, last - first + 1);
+}
+
 std::vector<std::string> split_response_path(const std::string &response_json_path)
 {
 	if (response_json_path.empty())
@@ -75,11 +86,14 @@ std::size_t parse_array_index(const std::string &response_json_path, const std::
 } // namespace
 
 std::string resolve_custom_api_response(const nlohmann::json &response,
-					const std::string &response_json_path)
+					const std::string &configured_response_json_path)
 {
-	const auto segments = split_response_path(response_json_path);
+	const std::string response_json_path = trim_response_path(configured_response_json_path);
+	if (response_json_path.empty())
+		throw TranslationError("Failed to resolve response JSON path: path is empty");
 
-	// Preserve the existing behavior for a literal dotted key at the root.
+	// Preserve the existing behavior for a literal dotted key at the root. This runs
+	// before the path is split so legacy keys with empty segments still resolve.
 	if (response.is_object()) {
 		const auto exact_match = response.find(response_json_path);
 		if (exact_match != response.end()) {
@@ -88,6 +102,8 @@ std::string resolve_custom_api_response(const nlohmann::json &response,
 			return exact_match->get<std::string>();
 		}
 	}
+
+	const auto segments = split_response_path(response_json_path);
 
 	const json *current = &response;
 	for (const std::string &segment : segments) {

@@ -55,6 +55,12 @@ void run_tests()
 						  {"result", {{"text", "nested"}}}},
 						 "result.text"),
 		     "legacy", "legacy dotted key precedence");
+	expect_equal(resolve_custom_api_response({{"result.", "legacy"}}, "result."), "legacy",
+		     "legacy key with empty segment");
+	expect_equal(resolve_custom_api_response(
+			     {{"choices", {{{"message", {{"content", "hello"}}}}}}},
+			     "  choices.0.message.content\t\n"),
+		     "hello", "surrounding whitespace trimmed");
 	expect_equal(resolve_custom_api_response({{"0", {{"text", "hello"}}}}, "0.text"), "hello",
 		     "numeric object key");
 
@@ -88,6 +94,8 @@ void run_tests()
 	expect_translation_error({{"choices", json::array()}}, "choices.0.", "empty path segment",
 				 "empty trailing segment");
 	expect_translation_error({{"translation", "hello"}}, "", "path is empty", "empty path");
+	expect_translation_error({{"translation", "hello"}}, " \t ", "path is empty",
+				 "whitespace-only path");
 }
 
 } // namespace
