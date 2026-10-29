@@ -57,10 +57,10 @@ void run_tests()
 		     "legacy", "legacy dotted key precedence");
 	expect_equal(resolve_custom_api_response({{"result.", "legacy"}}, "result."), "legacy",
 		     "legacy key with empty segment");
-	expect_equal(resolve_custom_api_response(
-			     {{"choices", {{{"message", {{"content", "hello"}}}}}}},
-			     "  choices.0.message.content\t\n"),
-		     "hello", "surrounding whitespace trimmed");
+	expect_equal(
+		resolve_custom_api_response({{"choices", {{{"message", {{"content", "hello"}}}}}}},
+					    "  choices.0.message.content\t\n"),
+		"hello", "surrounding whitespace trimmed");
 	expect_equal(resolve_custom_api_response({{"0", {{"text", "hello"}}}}, "0.text"), "hello",
 		     "numeric object key");
 
