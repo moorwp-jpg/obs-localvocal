@@ -1,6 +1,10 @@
 use std::{collections::VecDeque, sync::Mutex, time::Duration};
 use video_bytestream_tools::webvtt::WebvttWrite;
 
+/// How many video frames before it is due a chunk may be written
+/// (see `WebvttMuxer::try_mux_into_bytestream`).
+const SEND_AHEAD_FRAMES: u32 = 2;
+
 pub struct WebvttMuxerBuilder {
     latency_to_video: Duration,
     send_frequency_hz: u8,
@@ -80,8 +84,13 @@ impl WebvttMuxerBuilder {
         send_frequency_hz: u8,
         video_frame_time: Duration,
     ) -> Self {
+        // A chunk is due `latency_to_video` after it starts, and may be written
+        // up to `SEND_AHEAD_FRAMES` frames before it is due. With less latency
+        // than that, a chunk could land in a frame before it starts, and its
+        // video offset would be negative (a panic that aborts the host).
+        let min_latency_to_video = video_frame_time * SEND_AHEAD_FRAMES;
         Self {
-            latency_to_video,
+            latency_to_video: latency_to_video.max(min_latency_to_video),
             send_frequency_hz,
             video_frame_time,
             tracks: vec![],
@@ -251,7 +260,8 @@ impl WebvttMuxer {
             u32::try_from(*next_chunk_number).unwrap() * duration_between_sends;
         let next_chunk_video_timestamp =
             *first_video_timestamp + self.latency_to_video + next_chunk_webvtt_timestamp;
-        if next_chunk_video_timestamp > video_timestamp + self.video_frame_time * 2 {
+        let send_ahead = self.video_frame_time * SEND_AHEAD_FRAMES;
+        if next_chunk_video_timestamp > video_timestamp + send_ahead {
             return Ok(add_header);
         }
         let chunk_number = *next_chunk_number;
@@ -273,5 +283,74 @@ impl WebvttMuxer {
         }
         *next_chunk_number += 1;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WebvttMuxer, WebvttMuxerBuilder, WebvttString, SEND_AHEAD_FRAMES};
+    use std::time::Duration;
+    use video_bytestream_tools::webvtt::{WebvttTrack, WebvttWrite};
+
+    const FRAME_TIME_30_FPS: Duration = Duration::from_nanos(33_333_333);
+
+    /// Records each payload's video offset instead of writing bytes.
+    struct OffsetRecorder(Vec<Duration>);
+
+    impl WebvttWrite for OffsetRecorder {
+        fn write_webvtt_header(
+            &mut self,
+            _max_latency_to_video: Duration,
+            _send_frequency_hz: u8,
+            _subtitle_tracks: &[WebvttTrack],
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn write_webvtt_payload(
+            &mut self,
+            _track_index: u8,
+            _chunk_number: u64,
+            _chunk_version: u8,
+            video_offset: Duration,
+            _webvtt_payload: &str,
+        ) -> std::io::Result<()> {
+            self.0.push(video_offset);
+            Ok(())
+        }
+    }
+
+    fn english_muxer(latency_ms: u64) -> WebvttMuxer {
+        let latency = Duration::from_millis(latency_ms);
+        let mut builder = WebvttMuxerBuilder::new(latency, 2, FRAME_TIME_30_FPS);
+        let name = WebvttString("English".to_string());
+        let lang = WebvttString("en".to_string());
+        let added = builder.add_track(false, false, false, name, lang, None, None);
+        assert!(added.is_ok());
+        builder.create_muxer()
+    }
+
+    #[test]
+    fn low_latency_does_not_panic() {
+        // At 30 fps these used to panic within the first second of video.
+        for latency_ms in [0, 10, 33, 50, 66] {
+            let muxer = english_muxer(latency_ms);
+            let mut writer = OffsetRecorder(Vec::new());
+            for frame in 0..300 {
+                let ts = Duration::from_secs(100) + FRAME_TIME_30_FPS * frame;
+                let result = muxer.try_mux_into_bytestream(ts, frame == 0, &mut writer);
+                assert!(result.is_ok());
+            }
+            assert!(writer.0.len() > 1, "no chunks at {latency_ms} ms");
+        }
+    }
+
+    #[test]
+    fn latency_is_at_least_send_ahead_window() {
+        let minimum = FRAME_TIME_30_FPS * SEND_AHEAD_FRAMES;
+        assert_eq!(english_muxer(0).latency_to_video, minimum);
+        assert_eq!(english_muxer(50).latency_to_video, minimum);
+        let latency = Duration::from_millis(100);
+        assert_eq!(english_muxer(100).latency_to_video, latency);
     }
 }
