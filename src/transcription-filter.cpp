@@ -273,8 +273,12 @@ void transcription_filter_update(void *data, obs_data_t *s)
 	gf->log_words = obs_data_get_bool(s, "log_words");
 	gf->caption_to_stream = obs_data_get_bool(s, "caption_to_stream");
 #ifdef ENABLE_WEBVTT
-	gf->webvtt_caption_to_stream = obs_data_get_bool(s, "webvtt_caption_to_stream");
-	gf->webvtt_caption_to_recording = obs_data_get_bool(s, "webvtt_caption_to_recording");
+	// Unchecking the WebVTT group turns it off but keeps the options inside it set
+	const bool webvtt_enabled = obs_data_get_bool(s, "webvtt_enable");
+	gf->webvtt_caption_to_stream = webvtt_enabled &&
+				       obs_data_get_bool(s, "webvtt_caption_to_stream");
+	gf->webvtt_caption_to_recording = webvtt_enabled &&
+					  obs_data_get_bool(s, "webvtt_caption_to_recording");
 
 	{
 		auto lock = std::unique_lock(gf->webvtt_settings_mutex);
