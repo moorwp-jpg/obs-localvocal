@@ -205,6 +205,9 @@ struct transcription_filter_data {
 
 	std::mutex whisper_buf_mutex;
 	std::mutex whisper_ctx_mutex;
+	// Set while shutdown_whisper_thread waits for whisper_ctx_mutex. A running inference
+	// holds that lock until it finishes, so this makes it stop early instead.
+	std::atomic<bool> whisper_abort_requested{false};
 	std::condition_variable wshiper_thread_cv;
 	std::optional<std::condition_variable> input_cv;
 
