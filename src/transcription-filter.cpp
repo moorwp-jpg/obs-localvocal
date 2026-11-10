@@ -557,7 +557,10 @@ void transcription_filter_update(void *data, obs_data_t *s)
 
 	obs_log(gf->log_level, "update whisper params");
 	{
-		std::lock_guard<std::mutex> lock(gf->whisper_ctx_mutex);
+		// Not whisper_ctx_mutex: a running inference holds it until it finishes, and
+		// waiting for that here freezes the settings window. The next inference picks
+		// these settings up.
+		std::lock_guard<std::mutex> lock(gf->whisper_params_mutex);
 
 		gf->n_context_sentences = (int)obs_data_get_int(s, "n_context_sentences");
 
@@ -590,10 +593,15 @@ void transcription_filter_update(void *data, obs_data_t *s)
 			}
 		}
 
-		if (gf->vad) {
-			const float vad_threshold = (float)obs_data_get_double(s, "vad_threshold");
-			gf->vad->set_threshold(vad_threshold);
-		}
+		// The strings point into the settings, which OBS frees when they change
+		own_whisper_params_strings(gf->whisper_params, gf->whisper_params_owned_strings);
+	}
+
+	// The VAD runs on the Whisper thread outside whisper_ctx_mutex, so that lock never
+	// guarded this. The VAD is only replaced on this (UI) thread.
+	if (gf->vad) {
+		const float vad_threshold = (float)obs_data_get_double(s, "vad_threshold");
+		gf->vad->set_threshold(vad_threshold);
 	}
 
 	if (gf->context != nullptr && (obs_source_enabled(gf->context) || gf->initial_creation)) {

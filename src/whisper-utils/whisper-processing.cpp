@@ -160,9 +160,23 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 		return {DETECTION_RESULT_UNKNOWN, "", t0, t1, {}, ""};
 	}
 
+	// Copy the settings, so they can change while this inference runs. Only
+	// whisper_params_mutex guards them; settings updates don't wait for an inference.
+	whisper_full_params whisper_params;
+	whisper_params_strings owned_strings;
+	int n_context_sentences;
+	float sentence_psum_accept_thresh;
+	{
+		std::lock_guard<std::mutex> params_lock(gf->whisper_params_mutex);
+		whisper_params = gf->whisper_params;
+		own_whisper_params_strings(whisper_params, owned_strings);
+		n_context_sentences = gf->n_context_sentences;
+		sentence_psum_accept_thresh = gf->sentence_psum_accept_thresh;
+	}
+
 	obs_log(gf->log_level, "%s: processing %d samples, %.3f sec, %d threads", __func__,
 		int(pcm32f_num_samples), float(pcm32f_num_samples) / WHISPER_SAMPLE_RATE,
-		gf->whisper_params.n_threads);
+		whisper_params.n_threads);
 
 	bool should_free_buffer = false;
 	float *pcm32f_data = (float *)pcm32f_data_;
@@ -201,22 +215,24 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 		return {DETECTION_RESULT_UNKNOWN, "", t0, t1, {}, ""};
 	}
 
-	if (gf->n_context_sentences > 0 && !gf->last_transcription_sentence.empty()) {
+	// declared here so it outlives whisper_full(), which reads it through whisper_params
+	std::string initial_prompt;
+	if (n_context_sentences > 0 && !gf->last_transcription_sentence.empty()) {
 		// set the initial prompt to the last transcription sentences (concatenated)
-		std::string initial_prompt = gf->last_transcription_sentence[0];
+		initial_prompt = gf->last_transcription_sentence[0];
 		for (size_t i = 1; i < gf->last_transcription_sentence.size(); ++i) {
 			initial_prompt += " " + gf->last_transcription_sentence[i];
 		}
-		gf->whisper_params.initial_prompt = initial_prompt.c_str();
-		obs_log(gf->log_level, "Initial prompt: %s", gf->whisper_params.initial_prompt);
+		whisper_params.initial_prompt = initial_prompt.c_str();
+		obs_log(gf->log_level, "Initial prompt: %s", whisper_params.initial_prompt);
 	}
 
 	obs_log(gf->log_level, "Running whisper inference. single segment? %s",
-		gf->whisper_params.single_segment ? "yes" : "no");
+		whisper_params.single_segment ? "yes" : "no");
 
 	// run the inference
 	int whisper_full_result = -1;
-	gf->whisper_params.duration_ms = (int)(whisper_duration_ms);
+	whisper_params.duration_ms = (int)(whisper_duration_ms);
 	try {
 		// whisper_full_params whisper_params_tmp = whisper_full_default_params(whisper_sampling_strategy::WHISPER_SAMPLING_BEAM_SEARCH);
 		// whisper_params_tmp.language = gf->whisper_params.language;
@@ -228,8 +244,8 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 		// whisper_params_tmp.suppress_blank = false;
 		// whisper_params_pretty_print(gf->whisper_params);
 		// whisper_params_pretty_print(whisper_params_tmp);
-		whisper_full_result = whisper_full(gf->whisper_context, gf->whisper_params,
-						   pcm32f_data, (int)pcm32f_size);
+		whisper_full_result = whisper_full(gf->whisper_context, whisper_params, pcm32f_data,
+						   (int)pcm32f_size);
 	} catch (const std::exception &e) {
 		obs_log(LOG_ERROR, "Whisper exception: %s. Filter restart is required", e.what());
 		whisper_free(gf->whisper_context);
@@ -243,9 +259,8 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 		bfree(pcm32f_data);
 	}
 
-	std::string language = gf->whisper_params.language;
-	if (gf->whisper_params.language == nullptr || strlen(gf->whisper_params.language) == 0 ||
-	    strcmp(gf->whisper_params.language, "auto") == 0) {
+	std::string language = whisper_params.language != nullptr ? whisper_params.language : "";
+	if (language.empty() || language == "auto") {
 		int lang_id = whisper_lang_auto_detect(gf->whisper_context, 0, 1, nullptr);
 		language = whisper_lang_str(lang_id);
 		obs_log(gf->log_level, "Detected language: %s", language.c_str());
@@ -310,9 +325,9 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 		}
 	}
 	sentence_p /= (float)tokens.size();
-	if (sentence_p < gf->sentence_psum_accept_thresh) {
+	if (sentence_p < sentence_psum_accept_thresh) {
 		obs_log(gf->log_level, "Sentence psum %.3f below threshold %.3f, skipping",
-			sentence_p, gf->sentence_psum_accept_thresh);
+			sentence_p, sentence_psum_accept_thresh);
 		return {DETECTION_RESULT_SILENCE, "", t0, t1, {}, language};
 	}
 
