@@ -22,6 +22,7 @@
 #include "translation/translation.h"
 #include "translation/translation-includes.h"
 #include "whisper-utils/silero-vad-onnx.h"
+#include "whisper-utils/whisper-params-strings.h"
 #include "whisper-utils/whisper-processing.h"
 #include "whisper-utils/token-buffer-thread.h"
 #include "translation/cloud-translation/translation-cloud.h"
@@ -135,12 +136,19 @@ struct transcription_filter_data {
 	/* whisper */
 	std::string whisper_model_path;
 	struct whisper_context *whisper_context;
+	// Settings for the next inference. They are guarded by whisper_params_mutex, not
+	// whisper_ctx_mutex: an inference holds whisper_ctx_mutex until it finishes, and
+	// settings updates must not wait for that. The strings they point to are owned by
+	// whisper_params_owned_strings.
+	std::mutex whisper_params_mutex;
 	whisper_full_params whisper_params;
+	whisper_params_strings whisper_params_owned_strings;
 
 	/* Silero VAD */
 	std::unique_ptr<VadIterator> vad;
 
 	float filler_p_threshold;
+	// Guarded by whisper_params_mutex
 	float sentence_psum_accept_thresh;
 
 	bool do_silence;
@@ -179,7 +187,7 @@ struct transcription_filter_data {
 	std::string last_text_for_cloud_translation;
 	std::string last_text_cloud_translation;
 
-	// Transcription context sentences
+	// Transcription context sentences. Guarded by whisper_params_mutex
 	int n_context_sentences;
 	std::deque<std::string> last_transcription_sentence;
 
