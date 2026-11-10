@@ -10,6 +10,9 @@ void shutdown_whisper_thread(struct transcription_filter_data *gf, bool clear_mo
 {
 	obs_log(gf->log_level, "shutdown_whisper_thread");
 	if (gf->whisper_context != nullptr) {
+		// A running inference holds the mutex until it finishes, which can take many
+		// seconds. Ask it to stop early (see run_whisper_inference).
+		gf->whisper_abort_requested = true;
 		// acquire the mutex before freeing the context
 		std::lock_guard<std::mutex> lock(gf->whisper_ctx_mutex);
 		whisper_free(gf->whisper_context);
@@ -19,6 +22,8 @@ void shutdown_whisper_thread(struct transcription_filter_data *gf, bool clear_mo
 	if (gf->whisper_thread.joinable()) {
 		gf->whisper_thread.join();
 	}
+	// The Whisper thread has exited, so the next one starts without the abort
+	gf->whisper_abort_requested = false;
 	if (clear_model_path && !gf->whisper_model_path.empty()) {
 		gf->whisper_model_path = "";
 	}
