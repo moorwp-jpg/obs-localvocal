@@ -23,6 +23,13 @@
 #include <chrono>
 #include <regex>
 
+// whisper.cpp calls this after each encoder pass and decoder step, and stops the
+// inference when it returns true
+static bool whisper_abort_requested_callback(void *data)
+{
+	return static_cast<struct transcription_filter_data *>(data)->whisper_abort_requested;
+}
+
 struct whisper_context *init_whisper_context(const std::string &model_path_in,
 					     struct transcription_filter_data *gf)
 {
@@ -233,6 +240,9 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 	// run the inference
 	int whisper_full_result = -1;
 	whisper_params.duration_ms = (int)(whisper_duration_ms);
+	// Lets shutdown_whisper_thread stop this inference early instead of waiting for it
+	whisper_params.abort_callback = whisper_abort_requested_callback;
+	whisper_params.abort_callback_user_data = gf;
 	try {
 		// whisper_full_params whisper_params_tmp = whisper_full_default_params(whisper_sampling_strategy::WHISPER_SAMPLING_BEAM_SEARCH);
 		// whisper_params_tmp.language = gf->whisper_params.language;
@@ -259,16 +269,22 @@ struct DetectionResultWithText run_whisper_inference(struct transcription_filter
 		bfree(pcm32f_data);
 	}
 
+	// Checked before detecting the language, which runs the encoder again
+	if (whisper_full_result != 0) {
+		if (gf->whisper_abort_requested) {
+			obs_log(LOG_INFO, "Whisper inference stopped early for shutdown");
+		} else {
+			obs_log(LOG_WARNING, "failed to process audio, error %d",
+				whisper_full_result);
+		}
+		return {DETECTION_RESULT_UNKNOWN, "", t0, t1, {}, ""};
+	}
+
 	std::string language = whisper_params.language != nullptr ? whisper_params.language : "";
 	if (language.empty() || language == "auto") {
 		int lang_id = whisper_lang_auto_detect(gf->whisper_context, 0, 1, nullptr);
 		language = whisper_lang_str(lang_id);
 		obs_log(gf->log_level, "Detected language: %s", language.c_str());
-	}
-
-	if (whisper_full_result != 0) {
-		obs_log(LOG_WARNING, "failed to process audio, error %d", whisper_full_result);
-		return {DETECTION_RESULT_UNKNOWN, "", t0, t1, {}, ""};
 	}
 
 	float sentence_p = 0.0f;
