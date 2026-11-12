@@ -267,6 +267,12 @@ void send_caption_to_webvtt(uint64_t possible_end_ts_ms, DetectionResultWithText
 		if (lang_to_track == output.language_to_track.end())
 			continue;
 
+		// The caption's audio ended before this output started, so there is nothing to
+		// show. Without this check, the unsigned duration below wraps around and the cue
+		// never expires.
+		if (possible_end_ts_ms <= output.start_timestamp_ms)
+			continue;
+
 		for (size_t i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
 			auto &muxer = output.webvtt_muxer[i];
 			if (!muxer)
