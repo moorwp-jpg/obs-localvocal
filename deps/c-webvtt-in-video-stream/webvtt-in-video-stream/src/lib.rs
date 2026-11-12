@@ -416,11 +416,11 @@ mod tests {
     #[test]
     fn long_video_gap_does_not_panic() {
         // A minute of video, a 60 second gap, then another minute.
-        let before = frames(START, 30 * 60);
-        let after = frames(START + Duration::from_secs(120), 30 * 60);
-        let offsets = mux(&english_muxer(10_000, 2), before.chain(after));
+        let muxer = english_muxer(10_000, 2);
+        mux(&muxer, frames(START, 30 * 60));
+        let after_gap = mux(&muxer, frames(START + Duration::from_secs(120), 30 * 60));
         // Chunks too late to send are dropped, and the muxer catches up.
         let latency = Duration::from_secs(10);
-        assert!(offsets.last().is_some_and(|offset| *offset <= latency));
+        assert!(after_gap.last().is_some_and(|offset| *offset <= latency));
     }
 }
