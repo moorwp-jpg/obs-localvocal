@@ -371,9 +371,18 @@ void set_text_callback(uint64_t possible_end_ts, struct transcription_filter_dat
 
 	std::string str_copy = result.text;
 
+	// Settings updates can change these from another thread
+	bool output_is_not_english;
+	size_t n_context_sentences;
+	{
+		std::lock_guard<std::mutex> lock(gf->whisper_params_mutex);
+		output_is_not_english = gf->whisper_params.language != nullptr &&
+					strcmp(gf->whisper_params.language, "en") != 0;
+		n_context_sentences = (size_t)gf->n_context_sentences;
+	}
+
 	// recondition the text - only if the output is not English
-	if (gf->whisper_params.language != nullptr &&
-	    strcmp(gf->whisper_params.language, "en") != 0) {
+	if (output_is_not_english) {
 		str_copy = fix_utf8(str_copy);
 	} else {
 		// only remove leading and trailing non-alphanumeric characters if the output is English
@@ -484,8 +493,7 @@ void set_text_callback(uint64_t possible_end_ts, struct transcription_filter_dat
 			// save the last subtitle if it was a full sentence
 			gf->last_transcription_sentence.push_back(result.text);
 			// remove the oldest sentence if the buffer is too long
-			while (gf->last_transcription_sentence.size() >
-			       (size_t)gf->n_context_sentences) {
+			while (gf->last_transcription_sentence.size() > n_context_sentences) {
 				gf->last_transcription_sentence.pop_front();
 			}
 		}
