@@ -267,6 +267,12 @@ void send_caption_to_webvtt(uint64_t possible_end_ts_ms, DetectionResultWithText
 		if (lang_to_track == output.language_to_track.end())
 			continue;
 
+		// The caption's audio ended before this output started, so there is nothing to
+		// show. Without this check, the unsigned duration below wraps around and the cue
+		// never expires.
+		if (possible_end_ts_ms <= output.start_timestamp_ms)
+			continue;
+
 		for (size_t i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
 			auto &muxer = output.webvtt_muxer[i];
 			if (!muxer)
@@ -337,23 +343,19 @@ void output_text(struct transcription_filter_data *gf, const DetectionResultWith
 			send_sentence_to_file(gf, result, text, gf->output_file_path, true);
 		}
 #ifdef ENABLE_WEBVTT
-		if (result.result == DETECTION_RESULT_SPEECH) {
+		// Only translations here: set_text_callback already sends the original transcription
+		// to WebVTT, whether or not it is also shown on screen
+		if (result.result == DETECTION_RESULT_SPEECH &&
+		    translation_type != NO_TRANSLATION) {
 			obs_log(LOG_DEBUG, "-- webvtt output -- %s", text.c_str());
-			if (translation_type == NO_TRANSLATION) {
-				send_caption_to_webvtt(possible_end_ts, result, text, *gf);
-			} else {
-				auto target_language_code =
-					translation_type == LOCAL_TRANSLATION
-						? gf->target_lang
-						: gf->translate_cloud_target_language;
-				auto target_lang =
-					language_codes_to_whisper.find(target_language_code);
-				if (target_lang != language_codes_to_whisper.end()) {
-					auto res_copy = result;
-					res_copy.language = target_lang->second;
-					send_caption_to_webvtt(possible_end_ts, res_copy, text,
-							       *gf);
-				}
+			auto target_language_code = translation_type == LOCAL_TRANSLATION
+							    ? gf->target_lang
+							    : gf->translate_cloud_target_language;
+			auto target_lang = language_codes_to_whisper.find(target_language_code);
+			if (target_lang != language_codes_to_whisper.end()) {
+				auto res_copy = result;
+				res_copy.language = target_lang->second;
+				send_caption_to_webvtt(possible_end_ts, res_copy, text, *gf);
 			}
 		}
 #endif
